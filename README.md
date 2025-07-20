@@ -25,7 +25,7 @@ A project management web application built with Laravel 12, designed to help tea
 - **Laravel 12** (PHP Framework)
 - **MySQL** (Database)
 - **Dompdf** (PDF Generation Library)
-- **Bootstrap** (UI Framework)
+- **Tailwind CSS** (UI Framework)
 - **Blade** (Laravel Templating Engine)
 - **Authentication Middleware** (Role-based Access)
 

@@ -1,0 +1,219 @@
+<?php
+
+namespace App\Http\Controllers;
+
+use Illuminate\Http\Request;
+use App\Models\UserModel;
+use App\Models\ProjectModel;
+use App\Models\HistoryModel;
+use App\Models\DocsHistoryModel;
+use Illuminate\Support\Facades\Storage;
+
+class AdminController extends Controller
+{
+    protected $sessionData;
+    protected $userModel;
+    protected $projectModel;
+    protected $historyModel;
+    protected $docsHistoryModel;
+
+    public function __construct()
+    {
+        // Inisialisasi model
+        $this->userModel = new UserModel();
+        $this->projectModel = new ProjectModel();
+        $this->historyModel = new HistoryModel();
+        $this->docsHistoryModel = new DocsHistoryModel();
+
+        $this->sessionData = [
+            'username' => session('username'),
+            'level' => (session('level') == 1) ? 'Admin' : 'Project Manager'
+        ];
+    }
+
+    // Method untuk menampilkan halaman dashboard admin
+    public function index(Request $request)
+    {
+        $keyword = $request->get('search'); // Ambil kata kunci pencarian
+    
+        // Hitung total proyek yang diassign ke Project Manager
+        $totalProjects = $this->projectModel->count();
+    
+        // Hitung proyek yang sudah "Finished"
+        $finishedProjects = $this->historyModel
+            ->where('Status', 'Finish')
+            ->count();
+    
+        // Ambil proyek dengan status "On Progress" sesuai pencarian
+        if ($keyword) {
+            $historyProjects = $this->historyModel
+                ->where('Status', 'On Progress')
+                ->where('Title', 'like', '%' . $keyword . '%') // Filter berdasarkan keyword di Title
+                ->get();
+        } else {
+            $historyProjects = $this->historyModel
+                ->where('Status', 'On Progress')
+                ->get();
+        }
+    
+        // Kirim data ke view
+        $data = [
+            'historyprojects'  => $historyProjects,
+            'totalProjects'    => $totalProjects,
+            'finishedProjects' => $finishedProjects,
+            'search'           => $keyword, // Kirimkan keyword ke view
+        ];
+    
+        return view('admin.dashboard', array_merge($this->sessionData ?? [], $data));
+    }
+
+    // Method untuk menampilkan form tambah project
+    public function addNewProject()
+    {
+        $data['projectManagers'] = $this->userModel->getProjectManagers();
+        
+        return view('admin.addnewproject', array_merge($this->sessionData ?? [], $data));
+    }
+
+    // Method untuk menyimpan data project baru
+    public function store(Request $request)
+    {
+        // Ambil data dari form
+        $ProjectManager = $request->input('ProjectManager');
+        $Title = $request->input('Title');
+        $ClientCompany  = $request->input('ClientCompany');
+        $ClientName = $request->input('ClientName');
+        $ProjectSchedule = $request->input('ProjectSchedule');
+
+        // Validasi input
+        if (empty($ProjectManager) || empty($Title) || empty($ClientCompany) || empty($ClientName) || empty($ProjectSchedule)) {
+            return redirect()->back()->with('error', 'All fields are required!')->withInput();
+        }
+
+        try {
+            // Panggil procedure untuk menyimpan data
+            $this->projectModel->addProjectUsingProcedure($ProjectManager, $Title, $ClientCompany, $ClientName, $ProjectSchedule);
+            
+            // Set flash message sukses
+            return redirect()->back()->with('success', 'Project successfully added!');
+        } catch (\Exception $e) {
+            // Set flash message error jika terjadi kesalahan
+            return redirect()->back()->with('error', 'Error occurred: ' . $e->getMessage());
+        }
+    }
+
+    // Method untuk menampilkan history project
+    public function historyProject(Request $request)
+    {
+        $keyword = $request->get('search'); // Ambil kata kunci pencarian
+    
+        if ($keyword) {
+            $historyProjects = $this->historyModel
+                ->where('Title', 'like', '%' . $keyword . '%')
+                ->get();
+        } else {
+            $historyProjects = $this->historyModel
+                ->get();
+        }
+
+        // Ambil data dokumen history
+        $docsHistory = [];
+        foreach ($historyProjects as $history) {
+            $docsHistory[$history['Id']] = $this->docsHistoryModel->where('Id', $history['Id'])->get();
+        }
+    
+        $data = [
+            'historyprojects' => $historyProjects,
+            'search'          => $keyword, // Kirimkan keyword ke view
+        ];
+    
+        return view('admin.history', array_merge($this->sessionData ?? [], $data));
+    }
+
+    // Method untuk mengupdate history project
+    public function updateHistoryProject(Request $request, $Id = null)
+    {
+        if ($request->isMethod('PUT')) {
+            $Id = $request->input('Id');
+            
+            $pdfFile = $request->file('Document');
+            $uploadPath = storage_path('app/public/uploads');
+
+            // Perbarui status di historyModel
+            $this->historyModel->where('id', $Id)->update([
+                'Status' => $request->input('ProjectStatus')
+            ]);
+
+            // Perbarui dokumen di docsHistoryModel
+            if ($pdfFile && $pdfFile->isValid()) {
+                $history = $this->historyModel->find($Id);
+                if ($history) {
+                    $newName = $history->Title . '_' . date('Ymd') . '.pdf';
+                    $pdfFile->storeAs('public/uploads', $newName);
+    
+                    $this->docsHistoryModel->create([
+                        'ProjectId' => $history->ProjectId,
+                        'Title'     => $history->Title,
+                        'Document'  => $newName,
+                    ]);
+                }
+            }
+    
+            return redirect()->to('/admin/history')->with('success', 'Data successfully updated!');
+        }
+        
+        $data['history'] = $this->historyModel->find($Id);
+        $data['docshistory'] = $this->docsHistoryModel->where('ProjectId', $Id)->get();
+        return view('admin.updateproject', array_merge($this->sessionData ?? [], $data));
+    }
+
+
+    // Method untuk menampilkan daftar dokumen berdasarkan ProjectId
+    public function docsHistory(Request $request, $Id = null)
+    {
+        $keyword = $request->get('search'); // Ambil kata kunci pencarian
+        
+        // Ambil data dokumen history berdasarkan ProjectId
+        if ($keyword) {
+            $docsHistory = $this->docsHistoryModel
+                ->where('ProjectId', $Id)
+                ->where('DateAdded', 'like', '%' . $keyword . '%')
+                ->get();
+        } else {
+            $docsHistory = $this->docsHistoryModel
+                ->where('ProjectId', $Id)
+                ->get();
+        }
+
+        // Ambil judul project
+        $project = $this->projectModel->find($Id);
+
+        // Kirim data ke view
+        $data = [
+            'docshistory' => $docsHistory,
+            'search'      => $keyword, // Kirimkan keyword ke view
+            'Id'          => $Id,
+            'projectTitle' => $project->Title ?? '',
+        ];
+    
+        return view('admin.list_document', array_merge($this->sessionData ?? [], $data));
+    }
+
+    // Method untuk download file
+    public function download($Id)
+    {
+        $doc = $this->docsHistoryModel->find($Id);
+
+        if (!$doc || empty($doc->Document)) {
+            return redirect()->back()->with('error', 'Dokumen tidak ditemukan.');
+        }
+
+        $filePath = storage_path('app/public/uploads/' . $doc->Document);
+
+        if (!file_exists($filePath)) {
+            return redirect()->back()->with('error', 'File tidak ditemukan.');
+        }
+
+        return response()->download($filePath, $doc->Document);
+    }
+}
